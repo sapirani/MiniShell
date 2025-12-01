@@ -2,8 +2,9 @@
 #include <stdbool.h>
 #include <string.h>
 #include <process.h>
+#include <windows.h>
 
-#define MAX_COMMAND_LENGTH 20
+#define MAX_COMMAND_LENGTH 1000
 #define END_COMMAND "end"
 
 void parseArguments(char *comman_input, char **argv)
@@ -26,18 +27,121 @@ void parseArguments(char *comman_input, char **argv)
 
 void executeCommand(char **argv)
 {
-    int child_pid = fork();
-    int child_status;
-    if (child_pid == 0)
+    bool needsCmd = true;
+
+    if (strstr(argv[0], ".exe") || strstr(argv[0], ".bat") || strstr(argv[0], ".com"))
+        needsCmd = false;
+
+    // --- Build command line ---
+    size_t size = 50;
+    for (int i = 0; argv[i] != NULL; i++)
+        size += strlen(argv[i]) + 4;
+
+    char *cmdLine = malloc(size);
+    cmdLine[0] = '\0';
+
+    if (needsCmd)
     {
-        execvp(*argv, argv);
-        printf("Unknown command\n");
+        strcat(cmdLine, "cmd.exe /C ");
+        strcat(cmdLine, argv[0]);
+
+        for (int i = 1; argv[i] != NULL; i++)
+        {
+            strcat(cmdLine, " \"");
+            strcat(cmdLine, argv[i]);
+            strcat(cmdLine, "\"");
+        }
     }
     else
     {
-        wait(&child_status);
-        printf("koniec\n");
+        for (int i = 0; argv[i] != NULL; i++)
+        {
+            strcat(cmdLine, "\"");
+            strcat(cmdLine, argv[i]);
+            strcat(cmdLine, "\" ");
+        }
     }
+
+    // ----------------------
+    // Create pipe for stdout
+    // ----------------------
+    HANDLE hRead, hWrite;
+    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0))
+    {
+        printf("Pipe creation failed\n");
+        free(cmdLine);
+        return;
+    }
+
+    // Ensure read handle is not inherited (only write handle is)
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    // ----------------------
+    // Prepare STARTUPINFO
+    // ----------------------
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+
+    si.hStdOutput = hWrite; // child stdout redirected to pipe
+    si.hStdError = hWrite;  // also redirect stderr
+    si.hStdInput = NULL;    // no input redirection
+
+    ZeroMemory(&pi, sizeof(pi));
+
+    // ----------------------
+    // Create the process
+    // ----------------------
+    if (!CreateProcessA(
+            NULL,
+            cmdLine,
+            NULL,
+            NULL,
+            TRUE, // inherit handles!
+            0,
+            NULL,
+            NULL,
+            &si,
+            &pi))
+    {
+        printf("Unknown command or failed: %s\n", argv[0]);
+        CloseHandle(hRead);
+        CloseHandle(hWrite);
+        free(cmdLine);
+        return;
+    }
+
+    // Parent doesn't write
+    CloseHandle(hWrite);
+
+    // ----------------------
+    // Read child's output
+    // ----------------------
+    char buffer[4096];
+    DWORD bytesRead;
+
+    while (1)
+    {
+        BOOL success = ReadFile(hRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
+        if (!success || bytesRead == 0)
+            break;
+
+        buffer[bytesRead] = '\0'; // null-terminate
+        printf("Command output:\n");
+        printf("%s", buffer);
+    }
+
+    // Cleanup
+    CloseHandle(hRead);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    free(cmdLine);
 }
 
 int main(int argc, char *argv[])
@@ -59,6 +163,7 @@ int main(int argc, char *argv[])
             printf("Exiting program.\n");
             continue;
         }
+        printf("Executing command...\n");
         executeCommand(arg);
 
     } while (flag);
