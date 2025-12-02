@@ -25,12 +25,43 @@ void parseArguments(char *comman_input, char **argv)
     *argv = '\0';
 }
 
+bool shouldUseCmd(char *command)
+{
+    if (strstr(command, ".exe") || strstr(command, ".bat") || strstr(command, ".com"))
+        return false;
+    return true;
+}
+
+char *buildCommand(char *currentCommand, char **argv, bool needsCmd)
+{
+    if (needsCmd)
+    {
+        // Example: cmd.exe /C echo
+        strcat(currentCommand, "cmd.exe /C ");
+        strcat(currentCommand, argv[0]); // NO QUOTES ON COMMAND NAME
+    }
+    else
+    {
+        // Executables need quoting
+        strcat(currentCommand, "\"");
+        strcat(currentCommand, argv[0]);
+        strcat(currentCommand, "\"");
+    }
+
+    // Arguments start from index 1 always
+    for (int i = 1; argv[i] != NULL; i++)
+    {
+        strcat(currentCommand, " \"");   // <-- leading space is CRITICAL
+        strcat(currentCommand, argv[i]); // value
+        strcat(currentCommand, "\"");    // end quote
+    }
+
+    return currentCommand;
+}
+
 void executeCommand(char **argv)
 {
-    bool needsCmd = true;
-
-    if (strstr(argv[0], ".exe") || strstr(argv[0], ".bat") || strstr(argv[0], ".com"))
-        needsCmd = false;
+    bool needsCmd = shouldUseCmd(argv[0]);
 
     // --- Build command line ---
     size_t size = 50;
@@ -39,28 +70,7 @@ void executeCommand(char **argv)
 
     char *cmdLine = malloc(size);
     cmdLine[0] = '\0';
-
-    if (needsCmd)
-    {
-        strcat(cmdLine, "cmd.exe /C ");
-        strcat(cmdLine, argv[0]);
-
-        for (int i = 1; argv[i] != NULL; i++)
-        {
-            strcat(cmdLine, " \"");
-            strcat(cmdLine, argv[i]);
-            strcat(cmdLine, "\"");
-        }
-    }
-    else
-    {
-        for (int i = 0; argv[i] != NULL; i++)
-        {
-            strcat(cmdLine, "\"");
-            strcat(cmdLine, argv[i]);
-            strcat(cmdLine, "\" ");
-        }
-    }
+    buildCommand(cmdLine, argv, needsCmd);
 
     // ----------------------
     // Create pipe for stdout
